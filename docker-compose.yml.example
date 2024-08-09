@@ -1,0 +1,170 @@
+networks:
+  traefik:
+    external: true
+  internal:
+    name: ${STACK}
+    driver: overlay
+    attachable: true
+
+volumes:
+  database:
+  sftpssh:
+
+secrets:
+  MYSQL_DATABASE:
+    file: ./conf/mysql/secrets/MYSQL_DATABASE
+  MYSQL_USER:
+    file: ./conf/mysql/secrets/MYSQL_USER
+  MYSQL_PASSWORD:
+    file: ./conf/mysql/secrets/MYSQL_PASSWORD
+  MYSQL_ROOT_PASSWORD:
+    file: ./conf/mysql/secrets/MYSQL_ROOT_PASSWORD
+
+services:
+  wordpress:
+    image: wordpress:${WORDPRESS_VERSION}
+    user: www-data:www-data
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 15s
+      resources:
+        limits:
+          cpus: '1.20'
+          memory: 1024M
+    secrets:
+      - MYSQL_DATABASE
+      - MYSQL_USER
+      - MYSQL_PASSWORD
+    environment:
+      WORDPRESS_DB_HOST: database
+      WORDPRESS_DB_NAME_FILE: /run/secrets/MYSQL_DATABASE
+      WORDPRESS_DB_USER_FILE: /run/secrets/MYSQL_USER
+      WORDPRESS_DB_PASSWORD_FILE: /run/secrets/MYSQL_PASSWORD
+    volumes:
+      - ./volumes/wordpress:/var/www/html:rw
+      - ./conf/php/php-custom.ini:/usr/local/etc/php/conf.d/custom-php.ini:ro
+      - ./volumes/backups/wordpress:/var/backups/wordpress:rw
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      internal:
+    healthcheck:
+      test: (ps aux | grep php-fpm | grep -v grep) || exit 1
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  nginx:
+    build:
+      context: ./Dockerfile
+      dockerfile: nginx.dockerfile
+      args:
+        ARCH: ${ARCH}
+        NGINX_VERSION: ${NGINX_VERSION}
+    image: local/nginx:${NGINX_VERSION}
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 15s
+      resources:
+        limits:
+          cpus: '0.80'
+          memory: 320M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik"
+        # HTTP
+        - "traefik.http.routers.${STACK}_http.rule=Host(`hml.localhost`)"
+        - "traefik.http.routers.${STACK}_http.entrypoints=web"
+        - "traefik.http.routers.${STACK}_http.middlewares=redirect_https@docker"
+        # HTTPS
+        - "traefik.http.routers.${STACK}_https.rule=Host(`hml.localhost`)"
+        - "traefik.http.routers.${STACK}_https.tls=true"
+        - "traefik.http.routers.${STACK}_https.entrypoints=websecure"
+        #- "traefik.http.routers.${STACK}_https.tls.certresolver=letsencrypt"
+        # Service
+        - "traefik.http.services.${STACK}_http.loadbalancer.server.scheme=https"
+        - "traefik.http.services.${STACK}_http.loadbalancer.server.port=443"
+        - "traefik.http.services.${STACK}_http.loadBalancer.sticky.cookie=true"
+        - "traefik.http.services.${STACK}_http.loadBalancer.sticky.cookie.name=${STACK}_http"
+        - "traefik.http.services.${STACK}_http.loadbalancer.sticky.cookie.secure=true"
+    volumes:
+      - ./volumes/wordpress:/var/www/html:ro
+      - ./volumes/log/nginx:/var/log/nginx/:rw
+      - ./conf/nginx/conf.d:/etc/nginx/conf.d:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      traefik:
+      internal:
+    healthcheck:
+      test: curl -Is --insecure --fail https://localhost || exit 1
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    command: /bin/ash -c 'sleep 20; nginx -g "daemon off;"'
+
+  database:
+    image: mysql:${MYSQL_VERSION}
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 15s
+      resources:
+        limits:
+          cpus: '1.20'
+          memory: 1024M
+    secrets:
+      - MYSQL_DATABASE
+      - MYSQL_USER
+      - MYSQL_PASSWORD
+      - MYSQL_ROOT_PASSWORD
+    environment:
+      MYSQL_DATABASE_FILE: /run/secrets/MYSQL_DATABASE
+      MYSQL_USER_FILE: /run/secrets/MYSQL_USER
+      MYSQL_PASSWORD_FILE: /run/secrets/MYSQL_PASSWORD
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/MYSQL_ROOT_PASSWORD
+    volumes:
+      - database:/var/lib/mysql:rw
+      - ./conf/mysql/my.cnf:/etc/my.cnf:ro
+      - ./volumes/log/mysql:/var/log/mysql:rw
+      - ./volumes/backups/database/:/var/backups/database
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      internal:
+    ports:
+      - "${MYSQL_PORT_DOCKER}:3306"
+    command:
+      - mysqld
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_bin
+      - --default-authentication-plugin=caching_sha2_password
+
+  sftp:
+    image: atmoz/sftp
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 15s
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+    volumes:
+      - ./volumes/wordpress:/home/wpaccess/html:rw
+      - ./volumes/backups:/home/wpaccess/backups:ro
+      # Senha da chave ssh: Dcfgt90_WSE3
+      - ./conf/sftp/keys/wpaccess.id_ed25519.pub:/home/wpaccess/.ssh/keys/wpaccess.id_ed25519.pub:ro
+      - sftpssh:/etc/ssh/:rw
+    ports:
+      - "${SFTP_PORT_DOCKER}:22"
+    networks:
+      internal:
+    command: wpaccess::82:82

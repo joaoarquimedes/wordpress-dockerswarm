@@ -1,0 +1,21 @@
+.vscode/
+.env
+docker-compose.yml
+
+# Conf
+conf/mysql/secrets/*
+!conf/mysql/secrets/.gitkeep
+conf/sftp/keys/*
+!conf/sftp/keys/.gitkeep
+
+# Volumes
+volumes/backups/database/*
+!volumes/backups/database/.gitkeep
+volumes/backups/wordpress/*
+!volumes/backups/wordpress/.gitkeep
+volumes/log/mysql/*
+!volumes/log/mysql/.gitkeep
+volumes/log/nginx/*
+!volumes/log/nginx/.gitkeep
+volumes/wordpress/*
+!volumes/wordpress/.gitkeep
